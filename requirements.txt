@@ -1,1 +1,3 @@
 telethon~=1.39.0
+asyncpg
+python-dateutil
