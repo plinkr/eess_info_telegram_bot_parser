@@ -20,6 +20,7 @@ client = TelegramClient("bot_session", API_ID, API_HASH)
 
 async def init_db():
     conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
+    # conn = await asyncpg.connect("postgresql://postgres:postgres@localhost:5432/eess-bot-db")
     await conn.execute('''
         CREATE TABLE IF NOT EXISTS movimientos_apagones (
             id SERIAL PRIMARY KEY,
@@ -35,6 +36,7 @@ async def init_db():
 
 async def guardar_datos(circuito, tipo, hora_mensaje, hora_programada, hora_hasta):
     conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
+    # conn = await asyncpg.connect("postgresql://postgres:postgres@localhost:5432/eess-bot-db")
     await conn.execute('''
         INSERT INTO movimientos_apagones(circuito, tipo, hora_mensaje, hora_programada, hora_hasta)
         VALUES($1, $2, $3, $4, $5)
@@ -47,9 +49,10 @@ def extraer_info(mensaje: str):
     Extrae la hora, los circuitos a afectar y a restablecer, y el tiempo aproximado de afectación.
     Se separa el mensaje en dos bloques (afectar y restablecer) y se busca la hora en el mensaje.
     Si no se encuentra hora, se asigna "Hora no encontrada".
+    Intenta primero con el formato tradicional, y si falla, prueba con el nuevo formato.
     """
 
-    # Buscar la hora en el mensaje (ej: "Para las 8:55 am" o "Para las 12:00 m")
+    # Buscar la hora (ej: "Para las 8:55 am" o "Para las 12:00 m")
     hora_match = re.search(r"Para las?\s*(\d{1,2}:\d{2})\s*(am|pm|m)?", mensaje, re.IGNORECASE)
     hora = "Hora no encontrada"
 
@@ -70,6 +73,9 @@ def extraer_info(mensaje: str):
             hora = hora_dt.strftime("%I:%M %p")
         except ValueError:
             hora = "Hora no encontrada"
+    else:
+        # Este tipo de mensaje no trae la hora de afectación, es en el momento, la pondré con formato AM PM
+        hora = datetime.now().strftime("%I:%M %p")
 
     # Extraer bloque de afectar
     affect_block = ""
@@ -93,18 +99,50 @@ def extraer_info(mensaje: str):
     tiempo = tiempo_match.group(0) if tiempo_match else ""
 
     # Circuitos de interés
-    circuits_interes = ["121", "117", "113", "112"]
+    circuitos_interes = ["121", "117", "113", "112"]
     afectados = set()
     restablecidos = set()
 
     # Buscar en el bloque de afectar y el bloque de restablecer
-    for circuito in circuits_interes:
+    for circuito in circuitos_interes:
         if re.search(r"\b" + re.escape(circuito) + r"\b", affect_block):
             afectados.add(circuito)
         if re.search(r"\b" + re.escape(circuito) + r"\b", rest_block):
             restablecidos.add(circuito)
 
+    # Si no se encontró nada relevante, intentar con el nuevo formato
+    if not hora_match and not afectados and not restablecidos:
+        return extraer_info_alternativa(mensaje)
+
     return hora, afectados, restablecidos, tiempo
+
+
+def extraer_info_alternativa(mensaje: str):
+    """
+    Extrae información del nuevo formato tipo boletín
+    """
+
+    # Este tipo de mensaje no trae la hora de afectación, es en el momento, la pondré con formato AM PM
+    hora = datetime.now().strftime("%I:%M %p")
+
+    # Extraer líneas que contengan palabras clave como "Linea" o "Circuitos"
+    posibles_lineas = re.findall(r"(?:L[ií]neas?|Circuitos?)\s+[^\n]+", mensaje, re.IGNORECASE)
+
+    circuits_interes = ["121", "117", "113", "112"]
+    afectados = set()
+
+    for linea in posibles_lineas:
+        # Buscar circuitos con números de hasta 3 dígitos
+        circuitos = re.findall(r"\b\d{1,3}\b", linea)
+        for c in circuitos:
+            if c in circuits_interes:
+                afectados.add(c)
+
+    # Extraer tiempo aproximado
+    tiempo_match = re.search(r"Tiempo aproximado de afectación hasta\s*([^.\n]+)", mensaje, re.IGNORECASE)
+    tiempo = tiempo_match.group(0) if tiempo_match else ""
+
+    return hora, afectados, set(), tiempo
 
 
 def agrupar_circuitos(circuitos_set):
