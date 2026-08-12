@@ -34,14 +34,32 @@ async def init_db():
     await conn.close()
 
 
+async def esperar_bd_activa(max_intentos=10, espera_segundos=3):
+    for intento in range(max_intentos):
+        try:
+            conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
+            await conn.close()
+            print("La base de datos está activa.")
+            return True
+        except (ConnectionRefusedError, OSError):
+            print(f"Intento {intento + 1}/{max_intentos} fallido. Esperando {espera_segundos}s...")
+            await asyncio.sleep(espera_segundos)
+    print("No se pudo conectar a la base de datos tras varios intentos.")
+    return False
+
+
 async def guardar_datos(circuito, tipo, hora_mensaje, hora_programada, hora_hasta):
-    conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
-    # conn = await asyncpg.connect("postgresql://postgres:postgres@localhost:5432/eess-bot-db")
-    await conn.execute('''
-        INSERT INTO movimientos_apagones(circuito, tipo, hora_mensaje, hora_programada, hora_hasta)
-        VALUES($1, $2, $3, $4, $5)
-    ''', circuito, tipo, hora_mensaje, hora_programada, hora_hasta)
-    await conn.close()
+    if await esperar_bd_activa():
+        conn = await asyncpg.connect(os.getenv("DATABASE_URL"))
+        # conn = await asyncpg.connect("postgresql://postgres:postgres@localhost:5432/eess-bot-db")
+        await conn.execute('''
+            INSERT INTO movimientos_apagones(circuito, tipo, hora_mensaje, hora_programada, hora_hasta)
+            VALUES($1, $2, $3, $4, $5)
+        ''', circuito, tipo, hora_mensaje, hora_programada, hora_hasta)
+        await conn.close()
+    else:
+        print("Error: no se insertaron los datos porque la base de datos no respondió a tiempo.")
+
 
 
 def extraer_info(mensaje: str):
